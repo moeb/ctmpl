@@ -1,0 +1,133 @@
+#!/usr/bin/env python
+
+import jinja2
+
+INCLUDE_TEMPLATE_FILE = "#ctmpl"
+START_TEMPLATE = "#template"
+END_TEMPLATE = "#end"
+CALL_TEMPLATE = "#call"
+
+class ParseError(Exception):
+    pass
+
+class TemplateMappingError(Exception):
+    pass
+
+class CTemplate(object):
+    __templates__ = {}
+
+    def __init__(self, name, code, keys):
+        self.name = name
+        if name in type(self).__templates__:
+            raise TemplateMappingError
+        type(self).__templates__[self.name] = self
+        self.tmpl = jinja2.Template(code)
+        self.keys = keys
+
+    def __call__(self, args):
+        arg_map = {}
+        for i, key in enumerate(self.keys):
+            arg_map[key] = args[i]
+        return self.tmpl.render(**arg_map)
+
+    @classmethod
+    def get(cls, name):
+        return cls.__templates__[name]
+
+
+def parse_name_and_args(line):
+    name = line.split("(")[0].lstrip()
+    line = line[len(name):].lstrip()
+ 
+    if not line.startswith("("):
+        raise ParseError
+
+    line = line[1:]
+    splits = line.split(")")
+    
+    if len(splits) > 2:
+        raise ParseError
+    elif len(splits) > 1:
+        rest = splits[1]
+        rest = rest.strip()
+        if rest:
+            raise ParseError
+
+    arguments = splits[0]
+    arguments = arguments.split(",")
+    arguments = [arg.strip() for arg in arguments]
+    return name, arguments
+
+
+def parse_template(file, line):
+    line = line[9:].lstrip()
+    name, arguments = parse_name_and_args(line)
+
+    line = ""
+    code = []
+    while not line.startswith(END_TEMPLATE):
+        code.append(line)
+        line = file.next()
+
+    CTemplate(name, "".join(code), arguments)
+
+
+def parse_include(line, ccode):
+    orig = line
+    line = line[6:].lstrip()
+    if line.startswith("\""):
+        fname = line.split("\"")[1]
+    elif line.startswith("<"):
+        fname = line[1:].split(">")[0]
+    else:
+        raise ParseError
+    ccode.append(parse(fname).strip())
+
+
+def render_call(line, ccode):
+    line = line[5:].lstrip()
+    name, arguments = parse_name_and_args(line)
+    ccode.append(CTemplate.get(name)(arguments))
+    ccode.append("\n")
+
+
+def parse_line(file, ccode):
+    line = file.next()
+    ls = line.lstrip()
+    
+    if ls.startswith(INCLUDE_TEMPLATE_FILE):
+        parse_include(ls, ccode)
+    
+    elif ls.startswith(START_TEMPLATE):
+        parse_template(file, ls)
+    
+    elif ls.startswith(CALL_TEMPLATE):
+        render_call(ls, ccode)
+    
+    else:
+        ccode.append(line)
+
+
+def parse(fname):
+    ccode = []
+    file = open(fname)
+    while not file.closed:
+        try:
+            parse_line(file, ccode)
+        except StopIteration:
+            file.close()
+
+    return "".join(ccode)
+
+
+if __name__ == "__main__":
+    import os
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input")
+    parser.add_argument("-o", "--output")
+
+    args = parser.parse_args()
+    if os.path.isfile(args.input):
+        with open(args.output, "w") as f:
+            f.write(parse(args.input))
